@@ -13,6 +13,7 @@ def index():
 
 def gen_frames():
     """Generates camera frames with real-time gesture annotations."""
+    last_frame = None
     while True:
         frame_bytes = engine.get_frame()
         if frame_bytes is None:
@@ -31,12 +32,17 @@ def gen_frames():
             
             ret, jpeg = cv2.imencode('.jpg', blank_image)
             frame_bytes = jpeg.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.1)
+            continue
             
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        if frame_bytes != last_frame:
+            last_frame = frame_bytes
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         
-        # Limit yield frame rate to match engine's frame generation speed
-        time.sleep(0.04)
+        time.sleep(0.01)
 
 @app.route('/video_feed')
 def video_feed():
@@ -92,5 +98,5 @@ def get_logs():
     })
 
 if __name__ == '__main__':
-    # Run the Flask app locally on port 5000
-    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
+    # Run the Flask app locally on port 5000 (reloader disabled to prevent double webcam opening)
+    app.run(debug=True, use_reloader=False, host='0.0.0.0', port=5000, threaded=True)

@@ -30,73 +30,122 @@ try:
 except ImportError:
     HAS_PYCAW = False
 
+class CameraStream:
+    """Helper class to read frames from the webcam in a dedicated thread to eliminate lag."""
+    def __init__(self, src=0):
+        self.cap = cv2.VideoCapture(src)
+        self.grabbed = False
+        self.frame = None
+        self.started = False
+        self.read_lock = threading.Lock()
+
+    def start(self):
+        if self.started:
+            return self
+        self.started = True
+        self.thread = threading.Thread(target=self.update, args=())
+        self.thread.daemon = True
+        self.thread.start()
+        return self
+
+    def update(self):
+        while self.started:
+            if self.cap.isOpened():
+                grabbed, frame = self.cap.read()
+                if grabbed:
+                    with self.read_lock:
+                        self.grabbed = grabbed
+                        self.frame = frame
+            time.sleep(0.01)  # small sleep to prevent 100% CPU
+
+    def read(self):
+        with self.read_lock:
+            frame_copy = self.frame.copy() if self.frame is not None else None
+            grabbed = self.grabbed
+        return grabbed, frame_copy
+
+    def stop(self):
+        self.started = False
+        if self.cap.isOpened():
+            self.cap.release()
+
 class VolumeController:
-    """Manages system volume using pycaw on Windows, falling back to pyautogui controls."""
+    """Manages system volume using pycaw on Windows, falling back to pyautogui controls.
+    COM interfaces are initialized on-demand to prevent cross-thread COM exceptions.
+    """
     def __init__(self):
-        self.volume = None
-        if HAS_PYCAW:
-            try:
-                comtypes.CoInitialize()
-                devices = AudioUtilities.GetSpeakers()
-                if hasattr(devices, "EndpointVolume"):
-                    self.volume = devices.EndpointVolume
-                else:
-                    from ctypes import cast, POINTER
-                    from comtypes import CLSCTX_ALL
-                    from pycaw.pycaw import IAudioEndpointVolume
-                    interface = devices.Activate(
-                        IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-                    self.volume = cast(interface, POINTER(IAudioEndpointVolume))
-            except Exception as e:
-                print(f"[VolumeController] Failed to initialize pycaw: {e}")
-                self.volume = None
+        pass
+
+    def _get_volume_interface(self):
+        """Initializes and returns the volume interface for the current thread."""
+        if not HAS_PYCAW:
+            return None
+        try:
+            comtypes.CoInitialize()
+            devices = AudioUtilities.GetSpeakers()
+            if hasattr(devices, "EndpointVolume"):
+                return devices.EndpointVolume
+            elif devices:
+                interface = devices.Activate(
+                    IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+                return cast(interface, POINTER(IAudioEndpointVolume))
+        except Exception as e:
+            print(f"[VolumeController] Failed to get COM volume interface: {e}")
+        return None
 
     def change_volume(self, delta):
         """delta is positive (up) or negative (down) float, e.g. +0.05 or -0.05."""
-        if HAS_PYCAW and self.volume:
+        volume = self._get_volume_interface()
+        if volume:
             try:
-                comtypes.CoInitialize()
-                current_vol = self.volume.GetMasterVolumeLevelScalar()
+                current_vol = volume.GetMasterVolumeLevelScalar()
                 new_vol = max(0.0, min(1.0, current_vol + delta))
-                self.volume.SetMasterVolumeLevelScalar(new_vol, None)
+                volume.SetMasterVolumeLevelScalar(new_vol, None)
                 return int(new_vol * 100), f"Volume set to {int(new_vol * 100)}%"
             except Exception as e:
                 print(f"[VolumeController] pycaw error: {e}")
         
         # Fallback to pyautogui simulation
         if delta > 0:
-            pyautogui.press("volumeup")
+            if pyautogui:
+                pyautogui.press("volumeup")
             return None, "Volume Up (Key Sim)"
         else:
-            pyautogui.press("volumedown")
+            if pyautogui:
+                pyautogui.press("volumedown")
             return None, "Volume Down (Key Sim)"
 
     def toggle_mute(self):
-        if HAS_PYCAW and self.volume:
+        volume = self._get_volume_interface()
+        if volume:
             try:
-                comtypes.CoInitialize()
-                is_muted = self.volume.GetMute()
-                self.volume.SetMute(not is_muted, None)
+                is_muted = volume.GetMute()
+                volume.SetMute(not is_muted, None)
                 status = "Muted" if not is_muted else "Unmuted"
                 return status
             except Exception as e:
                 print(f"[VolumeController] pycaw mute error: {e}")
         
         # Fallback
-        pyautogui.press("volumemute")
+        if pyautogui:
+            pyautogui.press("volumemute")
         return "Mute Toggled (Key Sim)"
 
     def get_current_volume(self):
-        if HAS_PYCAW and self.volume:
+        volume = self._get_volume_interface()
+        if volume:
             try:
-                comtypes.CoInitialize()
-                return int(self.volume.GetMasterVolumeLevelScalar() * 100)
-            except Exception:
-                pass
+                return int(volume.GetMasterVolumeLevelScalar() * 100)
+            except Exception as e:
+                print(f"[VolumeController] pycaw get current volume error: {e}")
         return 50
 
 class GestureEngine:
-    """Processes webcam frames in a background thread, tracks hand landmarks, and maps gestures to actions."""
+    """Processes webcam frames using a decoupled pipeline:
+    - CameraStream: Dedicated frame grabber thread.
+    - Detection Thread: Asynchronously detects hand landmarks and triggers actions.
+    - Stream/HUD Thread: Draws HUD annotations and prepares JPEG streams at a steady 30 FPS.
+    """
     def __init__(self):
         self.volume_ctrl = VolumeController()
         
@@ -131,10 +180,16 @@ class GestureEngine:
         self.cooldown_seconds = 0.8
         self.last_action_time = 0
         
-        self.cap = None
-        self.thread = None
+        self.camera_stream = None
+        self.thread_detection = None
+        self.thread_stream = None
+        self.thread_demo = None
         self.lock = threading.Lock()
+        
         self.latest_frame = None
+        self.latest_landmarks = None
+        self.latest_handedness = "Right"
+        self.last_detection_time = 0
         self.detector = None
 
         # Check and download model asset if missing
@@ -211,16 +266,6 @@ class GestureEngine:
         # Check if palm is open or in a fist
         fingers_folded = not index_up and not middle_up and not ring_up and not pinky_up
         
-        # Calculate horizontal and vertical thumb movements
-        # Using pinky MCP (17) to index MCP (5) as a hand size scale reference
-        dx_hand = landmarks[5].x - landmarks[17].x
-        dy_hand = landmarks[5].y - landmarks[17].y
-        palm_width = math.sqrt(dx_hand**2 + dy_hand**2)
-        if palm_width == 0:
-            palm_width = 0.1
-            
-        thumb_index_dist = math.sqrt((landmarks[4].x - landmarks[5].x)**2 + (landmarks[4].y - landmarks[5].y)**2)
-        
         # Thumbs up or Thumbs down detection
         if fingers_folded:
             # Thumb tip is significantly higher than MCP/IP (y is lower)
@@ -266,15 +311,18 @@ class GestureEngine:
             self.add_log("Toggle Mute", details)
             
         elif action == "play_pause":
-            pyautogui.press("playpause")
+            if pyautogui:
+                pyautogui.press("playpause")
             self.add_log("Play / Pause", "Simulated Space/PlayPause Key")
             
         elif action == "next_slide":
-            pyautogui.press("right")
+            if pyautogui:
+                pyautogui.press("right")
             self.add_log("Next Slide", "Simulated Right Arrow Key")
             
         elif action == "prev_slide":
-            pyautogui.press("left")
+            if pyautogui:
+                pyautogui.press("left")
             self.add_log("Previous Slide", "Simulated Left Arrow Key")
             
         elif action == "none" or action is None:
@@ -310,90 +358,112 @@ class GestureEngine:
             cx, cy = int(p.x * w), int(p.y * h)
             cv2.circle(frame, (cx, cy), 4, (0, 255, 230), -1)
 
-    def _run_loop(self):
-        """Webcam frame capturing and MediaPipe processing background thread loop."""
+    def _run_detection_loop(self):
+        """Background thread to process hand landmark detection on the latest camera frame."""
         while True:
-            # Check is_running safely
             with self.lock:
                 if not self.is_running:
                     break
-                    
-            if self.cap is None or not self.cap.isOpened():
-                time.sleep(0.1)
+
+            if self.camera_stream is None:
+                time.sleep(0.05)
                 continue
-                
-            success, frame = self.cap.read()
-            if not success:
-                time.sleep(0.03)
+
+            grabbed, frame = self.camera_stream.read()
+            if not grabbed or frame is None:
+                time.sleep(0.01)
                 continue
-                
-            # Flip horizontally for mirrored selfie-camera view
-            frame = cv2.flip(frame, 1)
-            h, w, c = frame.shape
-            
-            # Convert frame to RGB for MediaPipe
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Convert OpenCV frame to MediaPipe Image object
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-            
-            # Run vision landmarker
+
+            # Limit hand landmarking to ~15 FPS to leave CPU for video encoding & OS response
+            now = time.time()
+            if now - self.last_detection_time < 0.066:
+                time.sleep(0.01)
+                continue
+            self.last_detection_time = now
+
+            # Flip horizontally for mirrored selfie-camera view (MediaPipe works better)
+            frame_rgb = cv2.flip(frame, 1)
+            frame_rgb = cv2.cvtColor(frame_rgb, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+
             gesture_detected = "None"
-            
+            detected_landmarks = None
+            detected_handedness = "Right"
+
             if self.detector is not None:
                 try:
                     results = self.detector.detect(mp_image)
-                    
                     if results.hand_landmarks:
-                        for idx, hand_landmarks in enumerate(results.hand_landmarks):
-                            # Handedness info
-                            hand_label = "Right"
-                            if results.handedness and idx < len(results.handedness):
-                                hand_label = results.handedness[idx][0].category_name
-                                
-                            gesture_detected = self.detect_gesture(hand_landmarks, hand_label)
+                        # Process the first tracked hand
+                        hand_landmarks = results.hand_landmarks[0]
+                        detected_landmarks = hand_landmarks
+                        
+                        if results.handedness:
+                            detected_handedness = results.handedness[0][0].category_name
                             
+                        gesture_detected = self.detect_gesture(hand_landmarks, detected_handedness)
+                        
+                        # Trigger system action
+                        if gesture_detected != "None":
                             with self.lock:
-                                self.last_gesture = gesture_detected
-                            
-                            # Draw annotations manually
-                            self.draw_landmarks(frame, hand_landmarks)
-                            
-                            # Trigger system actions
-                            if gesture_detected != "None":
-                                with self.lock:
-                                    mapped_action = self.mappings.get(gesture_detected)
-                                if mapped_action and mapped_action != "none":
-                                    triggered = self.execute_action(mapped_action)
-                                    if triggered:
-                                        # Overlay flash circle indicator on frame for positive feedback
-                                        cv2.circle(frame, (w - 30, 30), 12, (0, 255, 0), -1)
-                            
-                            # Add text overlay near wrist
-                            wrist = hand_landmarks[0]
-                            cx, cy = int(wrist.x * w), int(wrist.y * h)
-                            cv2.putText(frame, gesture_detected.upper(), (cx - 40, cy - 20),
-                                        cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 255, 255), 2)
-                    else:
-                        with self.lock:
-                            self.last_gesture = "None"
+                                mapped_action = self.mappings.get(gesture_detected)
+                            if mapped_action and mapped_action != "none":
+                                self.execute_action(mapped_action)
                 except Exception as e:
-                    print(f"[GestureEngine] Error during detection loop: {e}")
-                    with self.lock:
-                        self.last_gesture = "None"
-            else:
-                with self.lock:
-                    self.last_gesture = "None"
-                    
-            # Overlay status and gesture text HUD
+                    print(f"[GestureEngine] HandLandmarker error: {e}")
+
+            with self.lock:
+                self.last_gesture = gesture_detected
+                self.latest_landmarks = detected_landmarks
+                self.latest_handedness = detected_handedness
+
+            time.sleep(0.01)
+
+    def _run_stream_loop(self):
+        """Generates the visual stream with overlays drawn on it at a high, smooth frame rate."""
+        while True:
+            with self.lock:
+                if not self.is_running:
+                    break
+
+            if self.camera_stream is None:
+                time.sleep(0.05)
+                continue
+
+            grabbed, frame = self.camera_stream.read()
+            if not grabbed or frame is None:
+                time.sleep(0.01)
+                continue
+
+            # Flip horizontally for selfie mirroring
+            frame = cv2.flip(frame, 1)
+            h, w, _ = frame.shape
+
+            # Safely grab current tracking info
+            with self.lock:
+                landmarks = self.latest_landmarks
+                gesture_detected = self.last_gesture
+                mapped_action = self.mappings.get(gesture_detected, "none")
+
+            # Draw annotations
+            if landmarks is not None:
+                self.draw_landmarks(frame, landmarks)
+                
+                # Draw wrist label
+                wrist = landmarks[0]
+                cx, cy = int(wrist.x * w), int(wrist.y * h)
+                cv2.putText(frame, gesture_detected.upper(), (cx - 40, cy - 20),
+                            cv2.FONT_HERSHEY_DUPLEX, 0.7, (0, 255, 255), 2)
+                
+                # Flash circle feedback indicator if an action was executed recently
+                if gesture_detected != "None" and (time.time() - self.last_action_time < 0.3):
+                    cv2.circle(frame, (w - 30, 30), 12, (0, 255, 0), -1)
+
+            # Draw HUD overlay
             cv2.putText(frame, "STATUS: RUNNING", (20, 30), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 100), 2)
             
-            with self.lock:
-                mapped_action = self.mappings.get(gesture_detected, "none")
-            
             action_label = self.action_labels.get(mapped_action, "none").upper()
-            
             if gesture_detected != "None":
                 cv2.putText(frame, f"GESTURE: {gesture_detected.upper()} ({action_label})", (20, 60), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
@@ -401,13 +471,13 @@ class GestureEngine:
                 cv2.putText(frame, "GESTURE: NONE", (20, 60), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
+            # Encode frame to JPEG
             ret, jpeg = cv2.imencode('.jpg', frame)
             if ret:
                 with self.lock:
                     self.latest_frame = jpeg.tobytes()
-                    
-            # Cap the thread cycle rate to limit CPU consumption
-            time.sleep(0.03)
+
+            time.sleep(0.033)  # Aim for smooth ~30 FPS output
 
     def _run_demo_loop(self):
         """Generates synthetic demo frames cycling through gestures. Used on cloud deployments."""
@@ -457,7 +527,7 @@ class GestureEngine:
             # Gesture label in center
             text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.8, 2)[0]
             cv2.putText(frame, label, (cx - text_size[0]//2, cy + 8),
-                        cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 255), 2)
+                         cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 255), 2)
 
             # Action label below
             action_text = f"-> {action_label}"
@@ -510,8 +580,8 @@ class GestureEngine:
             with self.lock:
                 if not self.is_running:
                     self.is_running = True
-                    self.thread = threading.Thread(target=self._run_demo_loop, daemon=True)
-                    self.thread.start()
+                    self.thread_demo = threading.Thread(target=self._run_demo_loop, daemon=True)
+                    self.thread_demo.start()
                     self.add_log("System", "Demo Mode Started — Cycling gestures automatically")
                     return True
             return False
@@ -524,29 +594,63 @@ class GestureEngine:
 
         with self.lock:
             if not self.is_running:
-                self.cap = cv2.VideoCapture(0)
-                if not self.cap.isOpened():
+                # Start camera stream first
+                self.camera_stream = CameraStream(0)
+                self.camera_stream.start()
+                
+                # Wait up to 1 second for the camera to initialize and grab the first frame
+                initialized = False
+                for _ in range(20):
+                    time.sleep(0.05)
+                    grabbed, _ = self.camera_stream.read()
+                    if grabbed:
+                        initialized = True
+                        break
+                
+                if not initialized:
+                    self.camera_stream.stop()
+                    self.camera_stream = None
                     self.add_log("System", "Failed to access webcam")
                     return False
+
                 self.is_running = True
-                self.thread = threading.Thread(target=self._run_loop, daemon=True)
-                self.thread.start()
+                self.thread_detection = threading.Thread(target=self._run_detection_loop, daemon=True)
+                self.thread_stream = threading.Thread(target=self._run_stream_loop, daemon=True)
+                self.thread_detection.start()
+                self.thread_stream.start()
+                
                 self.add_log("System", "Gesture Controller Started")
                 return True
         return False
 
     def stop(self):
         with self.lock:
-            if self.is_running:
-                self.is_running = False
-                if self.cap:
-                    self.cap.release()
-                    self.cap = None
-                self.latest_frame = None
-                self.last_gesture = "None"
-                self.add_log("System", "Gesture Controller Stopped")
-                # Release the detector to free memory
-                self.detector = None
+            if not self.is_running:
+                return
+            self.is_running = False
+
+        # Stop and clean up threads and streams
+        if not DEMO_MODE:
+            if self.thread_detection:
+                self.thread_detection.join(timeout=0.5)
+                self.thread_detection = None
+            if self.thread_stream:
+                self.thread_stream.join(timeout=0.5)
+                self.thread_stream = None
+            if self.camera_stream:
+                self.camera_stream.stop()
+                self.camera_stream = None
+        else:
+            if self.thread_demo:
+                self.thread_demo.join(timeout=0.5)
+                self.thread_demo = None
+
+        with self.lock:
+            self.latest_frame = None
+            self.last_gesture = "None"
+            self.latest_landmarks = None
+            self.detector = None
+            self.add_log("System", "Gesture Controller Stopped")
 
     def get_frame(self):
         with self.lock:

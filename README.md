@@ -1,11 +1,12 @@
 # AuraGesture - Real-Time AI Hand Gesture Controller
 
+[![Live App](https://img.shields.io/badge/⚡_Live_App-ngrok_Tunnel-00ff66?style=for-the-badge)](https://squash-expenses-blabber.ngrok-free.dev/)
 [![Live Demo](https://img.shields.io/badge/🌐_Live_Demo-Portfolio_Page-00f0ff?style=for-the-badge)](https://gunashree2007.github.io/AIFE/)
 [![GitHub](https://img.shields.io/badge/GitHub-Gunashree2007%2FAIFE-181717?style=for-the-badge&logo=github)](https://github.com/Gunashree2007/AIFE)
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10+-00B0FF?style=for-the-badge)](https://mediapipe.dev)
 
-> 🌐 **[View Portfolio Page →](https://gunashree2007.github.io/AIFE/)** &nbsp;|&nbsp; ⭐ Star this repo if you found it useful!
+> ⚡ **[Try Live App (via ngrok) →](https://squash-expenses-blabber.ngrok-free.dev/)** &nbsp;|&nbsp; 🌐 **[View Portfolio Page →](https://gunashree2007.github.io/AIFE/)** &nbsp;|&nbsp; ⭐ Star this repo if you found it useful!
 
 AuraGesture is an AI-powered system volume, media, and presentation controller that runs in real-time using a web camera. It leverages computer vision and machine learning (MediaPipe Hands) to track hand coordinates, recognize geometric patterns, and execute local OS shortcuts (volume controls, playback toggles, and slide switching).
 

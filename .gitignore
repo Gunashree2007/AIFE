@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+
+# MediaPipe model file (large binary, users download on first run)
+hand_landmarker.task
+
+# Virtual environments
+venv/
+env/
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Flask session/debug
+instance/
+.flask_session/
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.user

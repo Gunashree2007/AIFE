@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AuraGesture - AI Hand Gesture Controller</title>
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Main Style Sheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="background-radial"></div>
+    <div class="background-grid"></div>
+
+    <div class="dashboard-container">
+        <!-- Header -->
+        <header class="dashboard-header animate-fade-in">
+            <div class="header-logo">
+                <i data-lucide="hand" class="logo-icon glow-cyan"></i>
+                <div class="logo-text">
+                    <h1>Aura<span>Gesture</span></h1>
+                    <p>Real-Time Computer Control with AI Vision</p>
+                </div>
+            </div>
+            <div class="header-badge">
+                <span class="status-pulse-dot" id="header-pulse"></span>
+                <span id="header-status-text">OFFLINE</span>
+            </div>
+        </header>
+
+        <!-- Main Content Grid -->
+        <main class="dashboard-grid">
+            
+            <!-- Left Panel: Feed and Mappings -->
+            <div class="grid-left animate-slide-in">
+                <!-- Video Stream Card -->
+                <div class="dashboard-card card-glow-indigo video-card">
+                    <div class="card-header">
+                        <h2><i data-lucide="video"></i>Live Camera Feed</h2>
+                        <div class="fps-badge">MediaPipe Hands Active</div>
+                    </div>
+                    <div class="video-container">
+                        <img id="video-stream" src="/video_feed" alt="Camera Stream" />
+                    </div>
+                    <div class="video-controls">
+                        <button id="btn-start" class="btn btn-primary">
+                            <i data-lucide="play"></i>Start Controller
+                        </button>
+                        <button id="btn-stop" class="btn btn-danger btn-disabled" disabled>
+                            <i data-lucide="square"></i>Stop Controller
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Config Mappings Card -->
+                <div class="dashboard-card card-glow-purple">
+                    <div class="card-header">
+                        <h2><i data-lucide="sliders-horizontal"></i>Gesture Mappings</h2>
+                        <button id="btn-reset-mappings" class="btn btn-secondary btn-sm">Reset</button>
+                    </div>
+                    <form id="mappings-form">
+                        <div class="mappings-grid" id="mappings-container">
+                            <!-- Populated by JS -->
+                            <div class="mapping-loading">Loading configuration...</div>
+                        </div>
+                        <button type="submit" class="btn btn-accent btn-block">
+                            <i data-lucide="save"></i>Apply Mappings
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Right Panel: Analytics, Info, and Logs -->
+            <div class="grid-right animate-slide-in-delay">
+                
+                <!-- Status widgets -->
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="stat-icon circle-cyan">
+                            <i data-lucide="activity"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3>Engine Status</h3>
+                            <p id="stat-engine">OFFLINE</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon circle-purple">
+                            <i data-lucide="scan-face"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3>Active Gesture</h3>
+                            <p id="stat-gesture">NONE</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Volume level feedback -->
+                <div class="dashboard-card card-glow-cyan volume-widget">
+                    <div class="card-header">
+                        <h2><i data-lucide="volume-2"></i>System Volume</h2>
+                        <span id="volume-val" class="volume-percentage">50%</span>
+                    </div>
+                    <div class="volume-bar-outer">
+                        <div id="volume-bar-inner" class="volume-bar-inner" style="width: 50%;"></div>
+                    </div>
+                </div>
+
+                <!-- Action logs -->
+                <div class="dashboard-card card-glow-indigo logs-card">
+                    <div class="card-header">
+                        <h2><i data-lucide="terminal"></i>Action Logs</h2>
+                        <span class="badge-pulsing" id="logs-count">0 Actions</span>
+                    </div>
+                    <div class="logs-container" id="logs-list">
+                        <div class="log-placeholder">System waiting for gesture triggers...</div>
+                    </div>
+                </div>
+
+                <!-- E-Portfolio Guide Card -->
+                <div class="dashboard-card card-glow-purple info-card">
+                    <div class="card-header">
+                        <h2><i data-lucide="graduation-cap"></i>AIML Portfolio Breakdown</h2>
+                    </div>
+                    <div class="info-content">
+                        <h4>How it Works</h4>
+                        <ul>
+                            <li><strong>MediaPipe Hands:</strong> Tracks 21 hand landmarks in 3D space at 30 FPS.</li>
+                            <li><strong>Vector Posture Matching:</strong> Checks geometry between finger tips (e.g. 8, 12) and knuckle joints (6, 10) to classify fingers as open/closed.</li>
+                            <li><strong>OS Controls:</strong> Simulates hardware keys (`pyautogui`) and interacts directly with Windows audio APIs (`pycaw`) inside concurrent daemon threads.</li>
+                        </ul>
+                        <div class="tech-tags">
+                            <span>OpenCV</span>
+                            <span>MediaPipe</span>
+                            <span>Flask</span>
+                            <span>PyAutoGUI</span>
+                            <span>PyCaw</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="dashboard-footer">
+            <p>Designed for AIML Students E-Portfolios. Code executes locally to interact with host hardware APIs.</p>
+        </footer>
+    </div>
+
+    <!-- App Logic -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

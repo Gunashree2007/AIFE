@@ -24,10 +24,19 @@ document.addEventListener("DOMContentLoaded", () => {
     // Default Action labels cache
     let actionLabels = {};
 
+    // Helper to automatically bypass ngrok warning page on API requests
+    async function customFetch(url, options = {}) {
+        if (!options.headers) {
+            options.headers = {};
+        }
+        options.headers["ngrok-skip-browser-warning"] = "true";
+        return fetch(url, options);
+    }
+
     // 1. Load Custom Mappings and populate the form
     async function loadMappings() {
         try {
-            const res = await fetch("/api/mappings");
+            const res = await customFetch("/api/mappings");
             const data = await res.json();
             
             actionLabels = data.labels;
@@ -82,7 +91,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         try {
-            const res = await fetch("/api/mappings", {
+            const res = await customFetch("/api/mappings", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
@@ -118,7 +127,7 @@ document.addEventListener("DOMContentLoaded", () => {
         btnStart.disabled = true;
         
         try {
-            const res = await fetch("/api/start", { method: "POST" });
+            const res = await customFetch("/api/start", { method: "POST" });
             const data = await res.json();
             
             if (data.success) {
@@ -141,7 +150,7 @@ document.addEventListener("DOMContentLoaded", () => {
         btnStop.disabled = true;
         
         try {
-            const res = await fetch("/api/stop", { method: "POST" });
+            const res = await customFetch("/api/stop", { method: "POST" });
             const data = await res.json();
             
             if (data.success) {
@@ -214,7 +223,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function pollStatus() {
         try {
-            const res = await fetch("/api/status");
+            const res = await customFetch("/api/status");
             const data = await res.json();
             
             // Sync engine state just in case it crashes or closes out-of-band
@@ -236,10 +245,10 @@ document.addEventListener("DOMContentLoaded", () => {
             console.error("Error polling status:", err);
         }
     }
-
+ 
     async function pollLogs() {
         try {
-            const res = await fetch("/api/logs");
+            const res = await customFetch("/api/logs");
             const data = await res.json();
             
             const logs = data.logs;

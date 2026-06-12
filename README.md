@@ -101,6 +101,30 @@ http://localhost:5000
 
 ---
 
+## 🌐 How to Deploy / Share Publicly
+
+### 1. Cloud Demo Mode (Render.com)
+You can deploy a cloud-friendly **Demo Mode** of this project on platforms like Render. The repository is pre-configured with a `render.yaml` and `Procfile`.
+- **How it works:** When deployed in the cloud, the app automatically switches to `DEMO_MODE` to avoid missing camera/audio hardware. It simulates a camera feed and runs all dashboard features automatically.
+- **To Deploy:** Connect your GitHub repository to [Render.com](https://render.com) and it will auto-deploy.
+
+### 2. Exposing Local Host to the Internet (ngrok)
+If you want to run the real gesture engine locally (using your actual webcam and system controls) but access it or share it via a public URL, you can tunnel it using **ngrok**:
+
+1. Install ngrok (on Windows, you can run `winget install ngrok.ngrok`).
+2. Sign up on [ngrok.com](https://ngrok.com) (free) to get your auth token.
+3. Authenticate ngrok in your terminal:
+   ```bash
+   ngrok config add-authtoken <YOUR_AUTHTOKEN>
+   ```
+4. Expose your locally running app (ensure `python app.py` is running on port 5000 first):
+   ```bash
+   ngrok http 5000
+   ```
+5. Copy the `https://....ngrok-free.app` forwarding URL provided by ngrok. Anyone with this link can view your live dashboard!
+
+---
+
 ## 🎮 Default Gesture Mappings
 
 | Hand Gesture | Visual Shape | Mapped PC Action |

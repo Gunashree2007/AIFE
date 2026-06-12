@@ -2,13 +2,23 @@ import cv2
 import mediapipe as mp
 import time
 import math
-import pyautogui
 import threading
 import os
 import urllib.request
+import numpy as np
 
-# Disable PyAutoGUI fail-safe to prevent application crashing if mouse moves to corners
-pyautogui.FAILSAFE = False
+# Check if running in cloud demo mode (no webcam/audio hardware available)
+DEMO_MODE = os.environ.get('DEMO_MODE', 'false').lower() == 'true'
+
+# Only import pyautogui if not in demo mode
+if not DEMO_MODE:
+    try:
+        import pyautogui
+        pyautogui.FAILSAFE = False
+    except Exception:
+        pyautogui = None
+else:
+    pyautogui = None
 
 # Platform-specific volume control (Windows pycaw)
 try:
@@ -399,14 +409,119 @@ class GestureEngine:
             # Cap the thread cycle rate to limit CPU consumption
             time.sleep(0.03)
 
+    def _run_demo_loop(self):
+        """Generates synthetic demo frames cycling through gestures. Used on cloud deployments."""
+        gestures_cycle = [
+            ("open_palm",  "🖐",  "OPEN PALM",  "Volume Down"),
+            ("point_up",   "☝",  "POINT UP",   "Volume Up"),
+            ("peace",      "✌",  "PEACE SIGN", "Play / Pause"),
+            ("fist",       "✊",  "FIST",        "Toggle Mute"),
+            ("thumbs_up",  "👍", "THUMBS UP",  "Next Slide"),
+            ("thumbs_down","👎", "THUMBS DOWN","Prev Slide"),
+        ]
+        idx = 0
+        gesture_hold = 0
+        HOLD_FRAMES = 60  # ~2 seconds per gesture at 30fps
+
+        while True:
+            with self.lock:
+                if not self.is_running:
+                    break
+
+            gesture_key, emoji, label, action_label = gestures_cycle[idx]
+
+            # Build a dark synthetic frame
+            frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            frame[:] = (12, 16, 28)  # Dark navy background
+
+            # Gradient overlay
+            for y in range(480):
+                alpha = y / 480
+                frame[y] = np.clip(
+                    frame[y] + np.array([int(8*alpha), int(4*alpha), int(20*alpha)]),
+                    0, 255
+                ).astype(np.uint8)
+
+            # Draw a glowing circle representing the "hand"
+            cx, cy = 320, 240
+            for r, alpha_val in [(90, 0.04), (70, 0.08), (50, 0.15)]:
+                overlay = frame.copy()
+                cv2.circle(overlay, (cx, cy), r, (0, 240, 255), -1)
+                cv2.addWeighted(overlay, alpha_val, frame, 1 - alpha_val, 0, frame)
+            cv2.circle(frame, (cx, cy), 48, (0, 200, 220), 2)
+
+            # Animated pulse ring
+            pulse_r = 55 + int(10 * abs(math.sin(time.time() * 3)))
+            cv2.circle(frame, (cx, cy), pulse_r, (0, 255, 200), 1)
+
+            # Gesture label in center
+            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_DUPLEX, 0.8, 2)[0]
+            cv2.putText(frame, label, (cx - text_size[0]//2, cy + 8),
+                        cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 255, 255), 2)
+
+            # Action label below
+            action_text = f"-> {action_label}"
+            asize = cv2.getTextSize(action_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)[0]
+            cv2.putText(frame, action_text, (cx - asize[0]//2, cy + 45),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 200, 0), 1)
+
+            # DEMO MODE badge (top-left)
+            cv2.rectangle(frame, (10, 10), (170, 38), (40, 20, 80), -1)
+            cv2.rectangle(frame, (10, 10), (170, 38), (120, 60, 200), 1)
+            cv2.putText(frame, "DEMO MODE", (18, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 100, 255), 1)
+
+            # Status HUD
+            cv2.putText(frame, "STATUS: RUNNING", (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 100), 2)
+            cv2.putText(frame, f"GESTURE: {label}", (10, 85),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1)
+
+            # Progress bar at bottom
+            progress = gesture_hold / HOLD_FRAMES
+            bar_w = int(620 * progress)
+            cv2.rectangle(frame, (10, 465), (630, 472), (30, 30, 50), -1)
+            cv2.rectangle(frame, (10, 465), (10 + bar_w, 472), (0, 200, 255), -1)
+            cv2.putText(frame, "Next gesture in...", (10, 460),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 120, 160), 1)
+
+            with self.lock:
+                self.last_gesture = gesture_key
+
+            # Trigger a simulated action at the start of each gesture
+            if gesture_hold == 5:
+                self.add_log(action_label, f"Demo: {label} gesture detected")
+
+            ret, jpeg = cv2.imencode('.jpg', frame)
+            if ret:
+                with self.lock:
+                    self.latest_frame = jpeg.tobytes()
+
+            gesture_hold += 1
+            if gesture_hold >= HOLD_FRAMES:
+                gesture_hold = 0
+                idx = (idx + 1) % len(gestures_cycle)
+
+            time.sleep(0.033)
+
     def start(self):
+        if DEMO_MODE:
+            # Cloud/demo deployment — no webcam or audio hardware needed
+            with self.lock:
+                if not self.is_running:
+                    self.is_running = True
+                    self.thread = threading.Thread(target=self._run_demo_loop, daemon=True)
+                    self.thread.start()
+                    self.add_log("System", "Demo Mode Started — Cycling gestures automatically")
+                    return True
+            return False
+
+        # Local mode — real webcam + MediaPipe
         self._ensure_model_downloaded()
-        
-        # Initialize the detector before starting the thread
         if not self._init_detector():
             self.add_log("System", "Could not initialize MediaPipe detector")
             return False
-            
+
         with self.lock:
             if not self.is_running:
                 self.cap = cv2.VideoCapture(0)

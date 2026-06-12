@@ -1,6 +1,9 @@
-opencv-python
+opencv-python-headless
 mediapipe
-pycaw
 pyautogui
 Flask
-comtypes
+gunicorn
+
+# Windows-only (ignored on cloud/Linux)
+# pycaw
+# comtypes
